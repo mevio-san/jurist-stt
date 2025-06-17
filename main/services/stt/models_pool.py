@@ -5,6 +5,20 @@ from .audio_model import STTAudioModel
 from enum import Enum
 import logging
 
+class AtomicCounter:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.counter = 0
+
+    def inc(self):
+        with self.lock:
+            self.counter += 1
+
+    def get(self):
+        with self.lock:
+            counter = self.counter
+        return counter
+            
 class PoolAllocationPolicy:
     def __init__(self, max_workers):
         self.__lock = threading.Lock()
@@ -28,52 +42,55 @@ class PoolAllocationPolicy:
         return True
             
         
-class ModelsPoolCmds(Enum):
-    RESET = 0
-    CLOSE = 1
-
-class ModelsPool():
+class ModelsPool:
+    SHUTDOWN_PRIORITY = -1
+    SHUTDOWN_OP       = 0x00
+    DATA_PRIORITY     = 1
+    DATA_OP           = 0x01
+    
     def __init__(self, max_workers):
         logging.getLogger('nemo_logger').setLevel(logging.ERROR)
         self.max_workers = max_workers
         self.executor = ThreadPoolExecutor(max_workers)
         self.pool_policy = PoolAllocationPolicy(max_workers)
-        self.cmds_queues = [queue.Queue() for _ in range(max_workers)]
-        self.chunks_queues = [queue.Queue() for _ in range(max_workers)]
-        self.output_queues = [queue.Queue() for _ in range(max_workers)]
-        self.executor.map(ModelsPool.__worker, list(range(max_workers)), self.cmds_queues, self.chunks_queues, self.output_queues)
+        self.in_queues = [queue.PriorityQueue() for _ in range(max_workers)]
+        self.out_queues = [queue.Queue() for _ in range(max_workers)]
+        self.executor.map(ModelsPool.__worker, list(range(max_workers)), self.in_queues, self.out_queues)
+        self.dummy_counter = AtomicCounter()
     
     def alloc_job(self):        
         return self.pool_policy.alloc()
 
     def submit_chunk(self, worker_id, chunk):
-        self.chunks_queues[worker_id].put(chunk)
+        self.dummy_counter.inc()
+        # Idiotic priority queue implementation, isn't it?
+        self.in_queues[worker_id].put((ModelsPool.DATA_PRIORITY, self.dummy_counter.get(), {'op': ModelsPool.DATA_OP, 'data': chunk}))
     
     def close_job(self, worker_id):
-        self.cmds_queues[worker_id].put(ModelsPoolCmds.RESET)
+        # Idiotic priority queue implementation, isn't it?
+        self.in_queues[worker_id].put((ModelsPool.SHUTDOWN_PRIORITY, self.dummy_counter.get(), {'op': ModelsPool.SHUTDOWN_OP}))
         self.pool_policy.free(worker_id)
             
     @staticmethod
-    def __worker(id, cmds_queue, chunks_queue, output_queue):
+    def __worker(id, in_queue, out_queue):
         model = STTAudioModel()
         print(f'Worker #{id} ready')
         last_transcription = ''
         while True:
-            if not cmds_queue.empty():
-                cmd = cmds_queue.get()            
-                if (cmd == ModelsPoolCmds.RESET):
-                    # empties chunks queue
-                    while not chunks_queue.empty():
-                        chunks_queue.get()
-                    model.reset_cache()
-                    last_transcription = ''
-                elif (cmd == ModelsPoolCmds.CLOSE):
-                    break
-            print("Waiting for chunks...")
-            chunk = chunks_queue.get()
-            print(f"received {len(chunk)} bytes (pool)")
-            transcription = model.transcribe_chunk(chunk)
-            if transcription != last_transcription:
-                output_queue.put(transcription)
-                last_transcription = transcription
+            print("Waiting for cmds/data...")
+            _, _, cmd = in_queue.get()
+            
+            if cmd['op'] == ModelsPool.SHUTDOWN_OP:
+                while not in_queue.empty():
+                    in_queue.get()
+                model.reset_cache()
+                print('resetting cache')
+                last_transcription = ''
+            else:
+                chunk = cmd['data']
+                print(f"received {len(chunk)} bytes (pool)")
+                transcription = model.transcribe_chunk(chunk)
+                if transcription != last_transcription:
+                    out_queue.put(transcription)
+                    last_transcription = transcription                
 

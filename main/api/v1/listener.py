@@ -8,7 +8,7 @@ from fastapi import (
 from services.stt.audio_adapter import STTAudioAdapter
 from services.stt.models_pool import ModelsPool
 
-MAX_CONCURRENT_MODELS = 4
+MAX_CONCURRENT_MODELS = 1
 
 _pool = ModelsPool(MAX_CONCURRENT_MODELS)
 
@@ -45,10 +45,10 @@ async def listen(
             chunk = await websocket.receive_bytes()
             conv_chunk = audio_adapter.transform(chunk)
             _pool.submit_chunk(worker_id, conv_chunk)
-            while not _pool.output_queues[worker_id].empty():
-                transcript =_pool.output_queues[worker_id].get()
+            while not _pool.out_queues[worker_id].empty():
+                transcript =_pool.out_queues[worker_id].get()
                 print(f"Transcript: {transcript}")
-                await websocket.send_bytes(bytes(transcript))
+                #await websocket.send_bytes(bytes('' if transcript is None else transcript))
             
     except WebSocketDisconnect:
         _pool.close_job(worker_id)
