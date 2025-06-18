@@ -55,7 +55,8 @@ class ModelsPool:
         self.pool_policy = PoolAllocationPolicy(max_workers)
         self.in_queues = [queue.PriorityQueue() for _ in range(max_workers)]
         self.out_queues = [queue.Queue() for _ in range(max_workers)]
-        self.executor.map(ModelsPool.__worker, list(range(max_workers)), self.in_queues, self.out_queues)
+        self.models = [STTAudioModel() for _ in range(max_workers)]
+        self.executor.map(ModelsPool.__worker, list(range(max_workers)), self.models, self.in_queues, self.out_queues)
         self.dummy_counter = AtomicCounter()
     
     def alloc_job(self):        
@@ -72,12 +73,10 @@ class ModelsPool:
         self.pool_policy.free(worker_id)
             
     @staticmethod
-    def __worker(id, in_queue, out_queue):
-        model = STTAudioModel()
+    def __worker(id, model, in_queue, out_queue):
+        #model = STTAudioModel()
         print(f'Worker #{id} ready')
-        last_transcription = ''
         while True:
-            print("Waiting for cmds/data...")
             _, _, cmd = in_queue.get()
             
             if cmd['op'] == ModelsPool.SHUTDOWN_OP:
@@ -86,11 +85,6 @@ class ModelsPool:
                 model.reset_cache()
                 print('resetting cache')
                 last_transcription = ''
-            else:
+            elif cmd['op'] == ModelsPool.DATA_OP:
                 chunk = cmd['data']
-                print(f"received {len(chunk)} bytes (pool)")
-                transcription = model.transcribe_chunk(chunk)
-                if transcription != last_transcription:
-                    out_queue.put(transcription)
-                    last_transcription = transcription                
-
+                model.ingest(chunk)

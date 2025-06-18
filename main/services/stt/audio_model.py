@@ -2,7 +2,7 @@ import copy
 import time
 import numpy as np
 import torch
-
+from threading import Lock
 from omegaconf import OmegaConf, open_dict
 
 import nemo.collections.asr as nemo_asr
@@ -16,10 +16,11 @@ class STTAudioModel:
     LOOKAHEAD_SIZE = 80
     DECODER_TYPE = 'rnnt'
     ENCODER_STEP_LENGTH = 80
-    MIN_CHUNK_SIZE = LOOKAHEAD_SIZE * SAMPLE_RATE // 1000
+    MIN_CHUNK_SAMPLES = 2 * LOOKAHEAD_SIZE * SAMPLE_RATE // 1000
     
     def __init__(self):
         self.__input_buffer = np.array([], dtype=np.int16)
+        self.lock = Lock()
         self.asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=STTAudioModel.MODEL_NAME)
         self.device = self.asr_model.device
         if STTAudioModel.MODEL_NAME == "stt_en_fastconformer_hybrid_large_streaming_multi":
@@ -96,24 +97,22 @@ class STTAudioModel:
             length=torch.Tensor([audio.shape[0]]).to(self.device)
         )
     
-    def transcribe_chunk(self, new_chunk):
-        # print('got chunk', len(new_chunk))
-        # print(f'{type(new_chunk)} {type(self.__input_buffer)}')
-        # self.__input_buffer = np.append(self.__input_buffer, new_chunk)
-        # print('a')
-        # if len(self.__input_buffer) < STTAudioModel.MIN_CHUNK_SIZE:
-        #     print('buffer too small, returning')
-        #     return False, None
-        # print('b')
-        # # get buffered chunk        
-        # chunk = self.__input_buffer[:STTAudioModel.MIN_CHUNK_SIZE]
+    def ingest(self, new_chunk):
+        with self.lock:
+            self.__input_buffer = np.append(self.__input_buffer, new_chunk)
+                
+    def transcribe(self):
+        #self.__input_buffer = np.append(self.__input_buffer, new_chunk)
+        with self.lock:
+            if len(self.__input_buffer) < STTAudioModel.MIN_CHUNK_SAMPLES:
+                return False, None
+            
+            # get buffered chunk        
+            chunk = self.__input_buffer[:STTAudioModel.MIN_CHUNK_SAMPLES]
 
-        # print('c')
-        # # consume the __input_buffer
-        # self.__input_buffer = self.__input_buffer[STTAudioModel.MIN_CHUNK_SIZE:]
-        
-        chunk = new_chunk
-        print(f'consuming the input buffer, len= {len(chunk)}')
+            # consume the __input_buffer
+            self.__input_buffer = self.__input_buffer[STTAudioModel.MIN_CHUNK_SAMPLES:]
+            
         # new_chunk (and chunk) is provided as np.int16, so we convert it to np.float32
         # as that is what our ASR models expect
         audio_data = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
@@ -153,6 +152,4 @@ class STTAudioModel:
         final_streaming_tran = STTAudioModel.__extract_transcriptions(transcribed_texts)
         self.step_num += 1
         
-        print('done chunk transcribing')
-        print(final_streaming_tran)
         return True, final_streaming_tran[0]
