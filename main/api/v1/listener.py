@@ -10,6 +10,7 @@ from fastapi import (
 )
 from services.stt.audio_adapter import STTAudioAdapter
 from services.stt.models_pool import ModelsPool
+from services.stt.messages import STTMessageOut
 
 MAX_CONCURRENT_MODELS = 1
 
@@ -26,26 +27,38 @@ listener_router = APIRouter(
 )
      
 WEBSOCKET_WRITER_TIMEOUT = 0.1
-PAUSE_DETECTION_TIMEOUT = 3.0
+PAUSE_DETECTION_TIMEOUT = 0.5
 
 def websocket_writer(websocket, model, stop_event):
     print('writer: ready')
     last_transcript = ''
     last_ts = time()
     in_pause = False
+
+    is_final, speech_final, text = False, False, ''
+    
     while not stop_event.is_set():
         done, transcript = model.transcribe()
         now = time()
         if not in_pause and now - last_ts > PAUSE_DETECTION_TIMEOUT:
             print('writer: pause detected')
+            msg = STTMessageOut()
+            msg.setTranscript(last_transcript)
+            msg.finalizeTranscript()
+            asyncio.run(websocket.send_bytes(msg.toJSON().encode('utf8')))
+            print(msg.toJSON())
+            
             last_ts = now
             in_pause = True
-        if done and transcript != last_transcript:
+            model.reset_hyps()
+        elif done and transcript != last_transcript:
+            msg = STTMessageOut()
+            msg.setTranscript(transcript)
+            asyncio.run(websocket.send_bytes(msg.toJSON().encode('utf8')))
+            
             last_transcript = transcript
             last_ts = now
             in_pause = False
-            print(f'writer: {transcript}')
-            #asyncio.run(websocket.send_bytes(bytes(transcript)))
         else:
             sleep(WEBSOCKET_WRITER_TIMEOUT)
     print('writer: shutting down')
@@ -63,12 +76,11 @@ async def listen(
 
     worker_id = _pool.alloc_job()
     if worker_id < 0:
-        print('No workers available, retry later')
+        await websocket.close(code=1013, reason="No workers available, retry later")
         return
+
     print(f"Successfully allocated worker #{worker_id}")
-    
-    print('websocket: initializing r/w tasks')
-    
+      
     writer_stop_event = Event()
     writer_thread = Thread(target=websocket_writer, args=(websocket, _pool.models[worker_id], writer_stop_event))
     writer_thread.start()
@@ -77,7 +89,6 @@ async def listen(
     try:
         while True:
             chunk = await websocket.receive_bytes()
-            print(f'reader: received {len(chunk)} bytes')
             conv_chunk = audio_adapter.transform(chunk)
             _pool.submit_chunk(worker_id, conv_chunk)
             

@@ -12,11 +12,11 @@ from nemo.collections.asr.parts.utils.rnnt_utils import Hypothesis
 
 class STTAudioModel:
     SAMPLE_RATE = 16000
-    MODEL_NAME = "stt_en_fastconformer_hybrid_large_streaming_80ms"
-    LOOKAHEAD_SIZE = 80
+    MODEL_NAME = "stt_en_fastconformer_hybrid_large_streaming_1040ms"
+    LOOKAHEAD_SIZE = 1040
     DECODER_TYPE = 'rnnt'
     ENCODER_STEP_LENGTH = 80
-    MIN_CHUNK_SAMPLES = 2 * LOOKAHEAD_SIZE * SAMPLE_RATE // 1000
+    MIN_CHUNK_SAMPLES = LOOKAHEAD_SIZE * SAMPLE_RATE // 1000
     
     def __init__(self):
         self.__input_buffer = np.array([], dtype=np.int16)
@@ -62,6 +62,10 @@ class STTAudioModel:
         self.pre_encode_cache_size = self.asr_model.encoder.streaming_cfg.pre_encode_cache_size[1]
         self.num_channels = self.asr_model.cfg.preprocessor.features
         self.cache_pre_encode = torch.zeros((1, self.num_channels, self.pre_encode_cache_size), device=self.device)
+    
+    def reset_hyps(self):
+        self.previous_hypotheses = None
+        self.pred_out_stream = None
         
     @staticmethod
     def __extract_transcriptions(hyps):
