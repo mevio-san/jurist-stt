@@ -2,8 +2,6 @@ from fastapi import WebSocket, WebSocketException, status
 from functools import wraps
 from core.config import config
 
-# TODO: True Bearer scheme
-
 def websocket_api_key_credentials(func):
     @wraps(func)
     async def wrapper(websocket: WebSocket, *args, **kwargs):
