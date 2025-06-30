@@ -62,7 +62,10 @@ class ModelsPool:
         self.dummy_counter = AtomicCounter()
     
     def alloc_job(self):        
-        return self.pool_policy.alloc()
+        model_id = self.pool_policy.alloc()
+        if model_id > 0:
+            self.models[model_id].reset_caches()
+        return model_id
 
     def submit_chunk(self, worker_id, chunk):
         self.dummy_counter.inc()
@@ -78,13 +81,12 @@ class ModelsPool:
     def __worker(id, model, in_queue, out_queue):
         logger.info(f'model_worker: worker #{id} ready')
         while True:
-            _, _, cmd = in_queue.get()
-            
+            _, _, cmd = in_queue.get()          
             if cmd['op'] == ModelsPool.SHUTDOWN_OP:
                 while not in_queue.empty():
                     in_queue.get()
                 model.reset_cache()
-                loffer.info('model_worker: resetting cache')
+                logger.info('model_worker: resetting cache')
                 last_transcription = ''
             elif cmd['op'] == ModelsPool.DATA_OP:
                 chunk = cmd['data']

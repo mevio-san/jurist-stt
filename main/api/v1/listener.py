@@ -91,6 +91,7 @@ async def listen(
     try:
         while True:
             chunk = await websocket.receive_bytes()
+            logger.info(f"received {len(chunk)} bytes")
             conv_chunk = audio_adapter.transform(chunk)
             _pool.submit_chunk(worker_id, conv_chunk)
             
