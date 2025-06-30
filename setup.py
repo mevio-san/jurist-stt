@@ -17,6 +17,7 @@ setup(
                       'attrs==25.3.0',
                       'audioread==3.0.1',
                       'backports-datetime-fromisoformat==2.0.3',
+                      'boto3',
                       'braceexpand==0.1.7',
                       'certifi==2025.4.26',
                       'cffi==1.17.1',

@@ -11,8 +11,9 @@ from fastapi import (
 from services.stt.audio_adapter import STTAudioAdapter
 from services.stt.models_pool import ModelsPool
 from services.stt.messages import STTMessageOut
+from core.logger import logger
 
-MAX_CONCURRENT_MODELS = 1
+MAX_CONCURRENT_MODELS = 2
 
 _pool = ModelsPool(MAX_CONCURRENT_MODELS)
 
@@ -26,11 +27,12 @@ listener_router = APIRouter(
     #route_class=LoggingRoute,
 )
      
-WEBSOCKET_WRITER_TIMEOUT = 0.1
+WEBSOCKET_WORKER_TIMEOUT = 0.1
 PAUSE_DETECTION_TIMEOUT = 0.5
 
-def websocket_writer(websocket, model, stop_event):
-    print('writer: ready')
+def websocket_worker(websocket, model, stop_event):
+    logger.info('worker: ready')
+
     last_transcript = ''
     last_ts = time()
     in_pause = False
@@ -41,12 +43,12 @@ def websocket_writer(websocket, model, stop_event):
         done, transcript = model.transcribe()
         now = time()
         if not in_pause and now - last_ts > PAUSE_DETECTION_TIMEOUT:
-            print('writer: pause detected')
+            logger.info('worker: pause detected')
             msg = STTMessageOut()
             msg.setTranscript(last_transcript)
             msg.finalizeTranscript()
             asyncio.run(websocket.send_bytes(msg.toJSON().encode('utf8')))
-            print(msg.toJSON())
+            logger.debug(msg.toJSON())
             
             last_ts = now
             in_pause = True
@@ -60,8 +62,8 @@ def websocket_writer(websocket, model, stop_event):
             last_ts = now
             in_pause = False
         else:
-            sleep(WEBSOCKET_WRITER_TIMEOUT)
-    print('writer: shutting down')
+            sleep(WEBSOCKET_WORKER_TIMEOUT)
+    logger.info('worker: shutting down')
         
 @listener_router.websocket("")
 @websocket_api_key_credentials
@@ -76,16 +78,16 @@ async def listen(
 
     worker_id = _pool.alloc_job()
     if worker_id < 0:
-        await websocket.close(code=1013, reason="No workers available, retry later")
+        logger.error("no workers available, retry later")
+        await websocket.close(code=1013, reason="no workers available, retry later")
         return
 
-    print(f"Successfully allocated worker #{worker_id}")
+    logger.info(f"successfully allocated worker #{worker_id}")
       
-    writer_stop_event = Event()
-    writer_thread = Thread(target=websocket_writer, args=(websocket, _pool.models[worker_id], writer_stop_event))
-    writer_thread.start()
+    worker_stop_event = Event()
+    worker_thread = Thread(target=websocket_worker, args=(websocket, _pool.models[worker_id], worker_stop_event))
+    worker_thread.start()
 
-    print('reader: ready')
     try:
         while True:
             chunk = await websocket.receive_bytes()
@@ -93,7 +95,7 @@ async def listen(
             _pool.submit_chunk(worker_id, conv_chunk)
             
     except WebSocketDisconnect:
-        print('reader: websocket closed')
+        logger.info('websocket closed')
         _pool.close_job(worker_id)
-        writer_stop_event.set()
-        writer_thread.join()
+        worker_stop_event.set()
+        worker_thread.join()

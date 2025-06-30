@@ -5,6 +5,8 @@ from .audio_model import STTAudioModel
 from enum import Enum
 import logging
 
+from core.logger import logger
+
 class AtomicCounter:
     def __init__(self):
         self.lock = threading.Lock()
@@ -74,8 +76,7 @@ class ModelsPool:
             
     @staticmethod
     def __worker(id, model, in_queue, out_queue):
-        #model = STTAudioModel()
-        print(f'Worker #{id} ready')
+        logger.info(f'model_worker: worker #{id} ready')
         while True:
             _, _, cmd = in_queue.get()
             
@@ -83,7 +84,7 @@ class ModelsPool:
                 while not in_queue.empty():
                     in_queue.get()
                 model.reset_cache()
-                print('resetting cache')
+                loffer.info('model_worker: resetting cache')
                 last_transcription = ''
             elif cmd['op'] == ModelsPool.DATA_OP:
                 chunk = cmd['data']
